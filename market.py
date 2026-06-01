@@ -139,6 +139,10 @@ class Market:
             r.pool = new_size
             r.baseline = new_size
 
+    def set_base_price(self, price):
+        for r in self.resources:
+            r.base_price = price
+
     def buy(self, resource_name, amount):
         r = self.get_resource(resource_name)
         if r:

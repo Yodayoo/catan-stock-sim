@@ -4,7 +4,7 @@ from market import Market, EVENTS
 
 RESOURCE_NAMES = ["Wheat", "Timber", "Sheep", "Stone", "Clay"]
 EVENT_NAMES = ["Drought", "Plague", "Construction Boom", "Flood", "Mild Season", "Wildfire", "Earthquake", "Gold Rush", "Plentiful Harvest"]
-ACTIONS = ["Buy", "Sell", "Season", "Event", "Speed", "Pool", "Quit"]
+ACTIONS = ["Buy", "Sell", "Season", "Event", "Settings", "Quit"]
 
 COLOR_WHEAT = 1
 COLOR_TIMBER = 2
@@ -153,7 +153,7 @@ def draw_info(stdscr, market, y0, max_x):
         pass
 
 
-def draw_menu(stdscr, max_y, max_x, state, sel_action, sel_res, sel_event, amount_str, tick_int):
+def draw_menu(stdscr, max_y, max_x, state, sel_action, sel_res, sel_event, sel_setting, amount_str, tick_int, market):
     y = max_y - 2
     try:
         for i, action in enumerate(ACTIONS):
@@ -178,11 +178,19 @@ def draw_menu(stdscr, max_y, max_x, state, sel_action, sel_res, sel_event, amoun
             action = ACTIONS[sel_action]
             stdscr.addstr(y, 2, f"{action} {res_name}: {amount_str or '_'}", curses.A_BOLD)
             stdscr.addstr("  \u23ce Esc")
-        elif state == 3:
-            stdscr.addstr(y, 2, f"Tick interval (seconds): {amount_str or '_'}", curses.A_BOLD)
-            stdscr.addstr("  \u23ce Esc")
         elif state == 5:
-            stdscr.addstr(y, 2, f"Pool size: {amount_str or '_'}", curses.A_BOLD)
+            labels = [f"1: Tick {tick_int}s", f"2: Pool {market.resources[0].baseline:.0f}", f"3: Price {market.resources[0].base_price:.0f}"]
+            stdscr.addstr(y, 2, "Settings: ", curses.A_BOLD)
+            for i, label in enumerate(labels):
+                x = 14 + i * 22
+                if i == sel_setting:
+                    stdscr.addstr(y, x, f"[{label}]", curses.A_REVERSE | curses.A_BOLD)
+                else:
+                    stdscr.addstr(y, x, f" {label} ")
+            stdscr.addstr("  \u2190/\u2192 \u23ce Esc")
+        elif state == 6:
+            setting_names = ["Tick interval (seconds)", "Pool size", "Normal price"]
+            stdscr.addstr(y, 2, f"{setting_names[sel_setting]}: {amount_str or '_'}", curses.A_BOLD)
             stdscr.addstr("  \u23ce Esc")
         elif state == 4:
             stdscr.addstr(y, 2, "Event: ", curses.A_BOLD)
@@ -244,6 +252,7 @@ def main(stdscr):
     sel_action = 0
     sel_res = 0
     sel_event = 0
+    sel_setting = 0
     amount_str = ""
     running = True
 
@@ -279,7 +288,7 @@ def main(stdscr):
         draw_header(stdscr, market, max_x)
         draw_chart(stdscr, market, header_h, chart_h, chart_w, x_offset)
         draw_info(stdscr, market, header_h + chart_h + 1, max_x)
-        draw_menu(stdscr, max_y, max_x, state, sel_action, sel_res, sel_event, amount_str, tick_interval)
+        draw_menu(stdscr, max_y, max_x, state, sel_action, sel_res, sel_event, sel_setting, amount_str, tick_interval, market)
         stdscr.refresh()
 
         key = stdscr.getch()
@@ -309,11 +318,8 @@ def main(stdscr):
                     else:
                         sel_event = 0
                         state = 4
-                elif a == "Speed":
-                    amount_str = ""
-                    state = 3
-                elif a == "Pool":
-                    amount_str = ""
+                elif a == "Settings":
+                    sel_setting = 0
                     state = 5
                 elif a == "Quit":
                     running = False
@@ -354,24 +360,6 @@ def main(stdscr):
             elif ord('0') <= key <= ord('9'):
                 amount_str += chr(key)
 
-        elif state == 3:
-            if key == 27:
-                state = 0
-                amount_str = ""
-            elif key in (ord('\n'), ord('\r')):
-                try:
-                    v = int(amount_str)
-                    if v > 0:
-                        tick_interval = v
-                except ValueError:
-                    pass
-                state = 0
-                amount_str = ""
-            elif key in (curses.KEY_BACKSPACE, 127):
-                amount_str = amount_str[:-1]
-            elif ord('0') <= key <= ord('9'):
-                amount_str += chr(key)
-
         elif state == 4:
             if key == curses.KEY_LEFT:
                 sel_event = max(0, sel_event - 1)
@@ -384,17 +372,33 @@ def main(stdscr):
                 state = 0
 
         elif state == 5:
-            if key == 27:
+            if key == curses.KEY_LEFT:
+                sel_setting = max(0, sel_setting - 1)
+            elif key == curses.KEY_RIGHT:
+                sel_setting = min(2, sel_setting + 1)
+            elif key in (ord('\n'), ord('\r')):
+                amount_str = ""
+                state = 6
+            elif key == 27:
                 state = 0
+
+        elif state == 6:
+            if key == 27:
+                state = 5
                 amount_str = ""
             elif key in (ord('\n'), ord('\r')):
                 try:
                     v = int(amount_str)
                     if v > 0:
-                        market.set_pool_size(v)
+                        if sel_setting == 0:
+                            tick_interval = v
+                        elif sel_setting == 1:
+                            market.set_pool_size(v)
+                        elif sel_setting == 2:
+                            market.set_base_price(v)
                 except ValueError:
                     pass
-                state = 0
+                state = 5
                 amount_str = ""
             elif key in (curses.KEY_BACKSPACE, 127):
                 amount_str = amount_str[:-1]

@@ -3,14 +3,14 @@ import random
 SEASONS = ["Spring", "Summer", "Autumn", "Winter"]
 
 SEASON_MULTIPLIERS = {
-    "Spring": {"Wheat": 0.77, "Timber": 1.0, "Sheep": 0.77, "Stone": 1.25, "Clay": 1.67},
-    "Summer": {"Wheat": 0.67, "Timber": 0.83, "Sheep": 1.25, "Stone": 1.0, "Clay": 0.77},
-    "Autumn": {"Wheat": 1.25, "Timber": 0.67, "Sheep": 0.83, "Stone": 1.0, "Clay": 1.0},
-    "Winter": {"Wheat": 2.5, "Timber": 1.67, "Sheep": 1.67, "Stone": 0.71, "Clay": 1.43},
+    "Spring": {"Wheat": 0.77, "Timber": 1.0, "Sheep": 0.77, "Stone": 1.25, "Clay": 1.67, "Gold": 1.02},
+    "Summer": {"Wheat": 0.67, "Timber": 0.83, "Sheep": 1.25, "Stone": 1.0, "Clay": 0.77, "Gold": 0.98},
+    "Autumn": {"Wheat": 1.25, "Timber": 0.67, "Sheep": 0.83, "Stone": 1.0, "Clay": 1.0, "Gold": 1.01},
+    "Winter": {"Wheat": 2.5, "Timber": 1.67, "Sheep": 1.67, "Stone": 0.71, "Clay": 1.43, "Gold": 0.99},
 }
 
 EVENTS = {
-    "Drought":           {"Wheat": 3.33},
+    "Drought":           {"Wheat": 2.0, "Clay": 1.5},
     "Plague":            {"Sheep": 2.5},
     "Construction Boom":  {"Stone": 1.8, "Timber": 1.5},
     "Flood":             {"Clay": 3.33, "Wheat": 2.0},
@@ -25,16 +25,19 @@ MAX_HISTORY = 300
 
 
 class Resource:
-    def __init__(self, name, base_price):
+    def __init__(self, name, base_price, volatility=1.0):
         self.name = name
         self.base_price = base_price
         self.pool = 50
         self.baseline = 50
+        self.volatility = volatility
         self.event_multiplier = 1.0
         self.event_active = False
         self.price_history = []
         self._season_factor = 1.0
         self._event_factor = 1.0
+        self.display_price = None
+        self.display_prev_price = None
 
     def get_season_multiplier(self, season):
         return SEASON_MULTIPLIERS[season].get(self.name, 1.0)
@@ -76,10 +79,13 @@ class Market:
             Resource("Sheep", 10),
             Resource("Stone", 10),
             Resource("Clay", 10),
+            Resource("Gold", 10, volatility=0.15),
         ]
         for r in self.resources:
             r._season_factor = r.get_season_multiplier(self.season)
             r._record_price(self.season)
+            r.display_price = r.calculate_price(self.season)
+            r.display_prev_price = r.display_price
 
     @property
     def season(self):
@@ -122,9 +128,9 @@ class Market:
 
     def tick(self):
         for r in self.resources:
-            r.pool += (r.baseline - r.pool) * 0.04 + random.uniform(-0.5, 0.5)
-            if random.random() < 0.2:
-                r.pool += random.gauss(0, 3)
+            r.pool += (r.baseline - r.pool) * 0.04 + random.uniform(-0.5, 0.5) * r.volatility
+            if random.random() < 0.2 * r.volatility:
+                r.pool += random.gauss(0, 3) * r.volatility
             r.tick_update(self.season)
             r._record_price(self.season)
 

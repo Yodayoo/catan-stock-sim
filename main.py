@@ -2,7 +2,7 @@ import curses
 import time
 from market import Market, EVENTS
 
-RESOURCE_NAMES = ["Wheat", "Timber", "Sheep", "Stone", "Clay"]
+RESOURCE_NAMES = ["Wheat", "Timber", "Sheep", "Stone", "Clay", "Gold"]
 EVENT_NAMES = ["Drought", "Plague", "Construction Boom", "Flood", "Mild Season", "Wildfire", "Earthquake", "Gold Rush", "Plentiful Harvest"]
 ACTIONS = ["Buy", "Sell", "Season", "Event", "Settings", "Quit"]
 
@@ -15,6 +15,7 @@ COLOR_HEADING = 6
 COLOR_SELECTED = 7
 COLOR_CHANGE_UP = 8
 COLOR_CHANGE_DOWN = 9
+COLOR_GOLD = 11
 
 RES_COLORS = {
     "Wheat": COLOR_WHEAT,
@@ -22,6 +23,7 @@ RES_COLORS = {
     "Sheep": COLOR_SHEEP,
     "Stone": COLOR_STONE,
     "Clay": COLOR_CLAY,
+    "Gold": COLOR_GOLD,
 }
 
 
@@ -48,10 +50,12 @@ def draw_line(ch, x0, y0, x1, y1, color):
             cy += sy
 
 
-def draw_header(stdscr, market, max_x):
+def draw_header(stdscr, market, max_x, feedback=""):
     s = f" STOCK SIMULATION    Season: {market.season}"
     if market.event_name:
         s += f"    Event: {market.event_name}"
+    if feedback:
+        s += f"    {feedback}"
     try:
         stdscr.addstr(0, 0, s, curses.A_BOLD)
         stdscr.addstr(1, 0, '=' * min(max_x - 1, len(s) + 10), curses.A_DIM)
@@ -101,8 +105,8 @@ def draw_chart(stdscr, market, y0, chart_h, chart_w, x_offset):
         except curses.error:
             pass
 
-    cidx = {"Wheat": 1, "Timber": 2, "Sheep": 3, "Stone": 4, "Clay": 5}
-    bold = {"Timber"}
+    cidx = {"Wheat": 1, "Timber": 2, "Sheep": 3, "Stone": 4, "Clay": 5, "Gold": 11}
+    bold = {"Timber", "Gold"}
     for res in market.resources:
         color = curses.color_pair(cidx[res.name])
         if res.name in bold:
@@ -128,18 +132,16 @@ def draw_info(stdscr, market, y0, max_x):
         line += 1
         for r in market.resources:
             mult = r.get_season_multiplier(market.season)
-            price = r.calculate_price(market.season)
             s_arrow = "\u25b2" if mult > 1 else ("\u25bc" if mult < 1 else "\u2500")
             mult_color = curses.color_pair(COLOR_CHANGE_UP) if mult > 1 else (curses.color_pair(COLOR_CHANGE_DOWN) if mult < 1 else 0)
             rcol = curses.color_pair(RES_COLORS[r.name])
             stdscr.addstr(line, 2, f"{r.name:<8}", rcol)
             stdscr.addstr(f" {mult:.1f}x ", mult_color)
             stdscr.addstr(f"{s_arrow}", mult_color)
-            stdscr.addstr(f" {price:>7.0f}", curses.A_BOLD)
+            stdscr.addstr(f" {r.display_price:>7.0f}", curses.A_BOLD)
             stdscr.addstr(f"  ({r.pool:>3.0f})")
-            if len(r.price_history) >= 2:
-                prev = r.price_history[-2]
-                diff = price - prev
+            if r.display_prev_price is not None:
+                diff = r.display_price - r.display_prev_price
                 if diff > 0:
                     stdscr.addstr(f"  +{diff:.0f}", curses.color_pair(COLOR_CHANGE_UP))
                 elif diff < 0:
@@ -244,6 +246,7 @@ def main(stdscr):
     curses.init_pair(COLOR_CHANGE_UP, curses.COLOR_GREEN, -1)
     curses.init_pair(COLOR_CHANGE_DOWN, curses.COLOR_RED, -1)
     curses.init_pair(10, curses.COLOR_CYAN, -1)
+    curses.init_pair(COLOR_GOLD, curses.COLOR_WHITE, -1)
 
     market = Market()
     tick_interval = 1
@@ -254,11 +257,146 @@ def main(stdscr):
     sel_event = 0
     sel_setting = 0
     amount_str = ""
+    feedback = ""
     running = True
 
+    redraw_chart = True
+
     while running:
+        now = time.time()
+        if now - last_tick >= tick_interval:
+            market.tick()
+            last_tick = now
+
+        key = stdscr.getch()
+        if key == -1 and not redraw_chart:
+            time.sleep(0.05)
+            continue
+
+        if key == curses.KEY_RESIZE:
+            redraw_chart = True
+            continue
+
+        if key == ord('p'):
+            redraw_chart = True
+            for r in market.resources:
+                r.display_prev_price = r.display_price
+                r.display_price = r.calculate_price(market.season)
+
+        if key != -1:
+            if feedback:
+                feedback = ""
+
+            if state == 0:
+                if key == curses.KEY_LEFT:
+                    sel_action = max(0, sel_action - 1)
+                elif key == curses.KEY_RIGHT:
+                    sel_action = min(len(ACTIONS) - 1, sel_action + 1)
+                elif key in (ord('\n'), ord('\r')):
+                    a = ACTIONS[sel_action]
+                    if a == "Buy" or a == "Sell":
+                        state = 1
+                        sel_res = 0
+                    elif a == "Season":
+                        market.advance_season()
+                    elif a == "Event":
+                        if market.event_name is not None:
+                            market.toggle_event()
+                        else:
+                            sel_event = 0
+                            state = 4
+                    elif a == "Settings":
+                        sel_setting = 0
+                        state = 5
+                    elif a == "Quit":
+                        running = False
+                elif key == ord('q'):
+                    running = False
+
+            elif state == 1:
+                if key == curses.KEY_LEFT:
+                    sel_res = max(0, sel_res - 1)
+                elif key == curses.KEY_RIGHT:
+                    sel_res = min(len(RESOURCE_NAMES) - 1, sel_res + 1)
+                elif key in (ord('\n'), ord('\r')):
+                    amount_str = ""
+                    state = 2
+                elif key == 27:
+                    state = 0
+
+            elif state == 2:
+                if key == 27:
+                    state = 0
+                    amount_str = ""
+                elif key in (ord('\n'), ord('\r')):
+                    try:
+                        amt = int(amount_str)
+                        if amt > 0:
+                            res = market.resources[sel_res]
+                            a = ACTIONS[sel_action].lower()
+                            price = res.calculate_price(market.season)
+                            total = amt * price
+                            if a == "buy":
+                                market.buy(res.name, float(amt))
+                            else:
+                                market.sell(res.name, float(amt))
+                            feedback = f"{a.title()} {amt}x {res.name} @ {price:.0f} = {total:.0f}"
+                    except ValueError:
+                        pass
+                    state = 0
+                    amount_str = ""
+                elif key in (curses.KEY_BACKSPACE, 127):
+                    amount_str = amount_str[:-1]
+                elif ord('0') <= key <= ord('9'):
+                    amount_str += chr(key)
+
+            elif state == 4:
+                if key == curses.KEY_LEFT:
+                    sel_event = max(0, sel_event - 1)
+                elif key == curses.KEY_RIGHT:
+                    sel_event = min(len(EVENT_NAMES) - 1, sel_event + 1)
+                elif key in (ord('\n'), ord('\r')):
+                    market.toggle_event(EVENT_NAMES[sel_event])
+                    state = 0
+                elif key == 27:
+                    state = 0
+
+            elif state == 5:
+                if key == curses.KEY_LEFT:
+                    sel_setting = max(0, sel_setting - 1)
+                elif key == curses.KEY_RIGHT:
+                    sel_setting = min(2, sel_setting + 1)
+                elif key in (ord('\n'), ord('\r')):
+                    amount_str = ""
+                    state = 6
+                elif key == 27:
+                    state = 0
+
+            elif state == 6:
+                if key == 27:
+                    state = 5
+                    amount_str = ""
+                elif key in (ord('\n'), ord('\r')):
+                    try:
+                        v = int(amount_str)
+                        if v > 0:
+                            if sel_setting == 0:
+                                tick_interval = v
+                            elif sel_setting == 1:
+                                market.set_pool_size(v)
+                            elif sel_setting == 2:
+                                market.set_base_price(v)
+                    except ValueError:
+                        pass
+                    state = 5
+                    amount_str = ""
+                elif key in (curses.KEY_BACKSPACE, 127):
+                    amount_str = amount_str[:-1]
+                elif ord('0') <= key <= ord('9'):
+                    amount_str += chr(key)
+
         max_y, max_x = stdscr.getmaxyx()
-        if max_y < 16 or max_x < 60:
+        if max_y < 17 or max_x < 60:
             stdscr.erase()
             try:
                 stdscr.addstr(0, 0, "Terminal too small. Resize to at least 60x16.")
@@ -270,7 +408,7 @@ def main(stdscr):
 
         header_h = 2
         menu_h = 2
-        info_h = 7
+        info_h = 8
         chart_h = max_y - header_h - menu_h - info_h
         if chart_h < 4:
             chart_h = 4
@@ -279,131 +417,24 @@ def main(stdscr):
         if chart_w < 10:
             chart_w = 10
 
-        now = time.time()
-        if now - last_tick >= tick_interval:
-            market.tick()
-            last_tick = now
-
-        stdscr.erase()
-        draw_header(stdscr, market, max_x)
-        draw_chart(stdscr, market, header_h, chart_h, chart_w, x_offset)
-        draw_info(stdscr, market, header_h + chart_h + 1, max_x)
-        draw_menu(stdscr, max_y, max_x, state, sel_action, sel_res, sel_event, sel_setting, amount_str, tick_interval, market)
-        stdscr.refresh()
-
-        key = stdscr.getch()
-        if key == curses.KEY_RESIZE:
+        if redraw_chart:
             stdscr.erase()
+            draw_header(stdscr, market, max_x, feedback)
+            draw_chart(stdscr, market, header_h, chart_h, chart_w, x_offset)
+            draw_info(stdscr, market, header_h + chart_h + 1, max_x)
+            draw_menu(stdscr, max_y, max_x, state, sel_action, sel_res, sel_event, sel_setting, amount_str, tick_interval, market)
             stdscr.refresh()
-            continue
-        if key == -1:
-            time.sleep(0.05)
-            continue
-
-        if state == 0:
-            if key == curses.KEY_LEFT:
-                sel_action = max(0, sel_action - 1)
-            elif key == curses.KEY_RIGHT:
-                sel_action = min(len(ACTIONS) - 1, sel_action + 1)
-            elif key in (ord('\n'), ord('\r')):
-                a = ACTIONS[sel_action]
-                if a == "Buy" or a == "Sell":
-                    state = 1
-                    sel_res = 0
-                elif a == "Season":
-                    market.advance_season()
-                elif a == "Event":
-                    if market.event_name is not None:
-                        market.toggle_event()
-                    else:
-                        sel_event = 0
-                        state = 4
-                elif a == "Settings":
-                    sel_setting = 0
-                    state = 5
-                elif a == "Quit":
-                    running = False
-            elif key == ord('q'):
-                running = False
-
-        elif state == 1:
-            if key == curses.KEY_LEFT:
-                sel_res = max(0, sel_res - 1)
-            elif key == curses.KEY_RIGHT:
-                sel_res = min(len(RESOURCE_NAMES) - 1, sel_res + 1)
-            elif key in (ord('\n'), ord('\r')):
-                amount_str = ""
-                state = 2
-            elif key == 27:
-                state = 0
-
-        elif state == 2:
-            if key == 27:
-                state = 0
-                amount_str = ""
-            elif key in (ord('\n'), ord('\r')):
+            redraw_chart = False
+        elif key != -1:
+            for l in list(range(header_h)) + list(range(header_h + chart_h + 1, max_y)):
                 try:
-                    amt = int(amount_str)
-                    if amt > 0:
-                        res = market.resources[sel_res]
-                        a = ACTIONS[sel_action].lower()
-                        if a == "buy":
-                            market.buy(res.name, float(amt))
-                        else:
-                            market.sell(res.name, float(amt))
-                except ValueError:
+                    stdscr.addstr(l, 0, ' ' * max_x)
+                except curses.error:
                     pass
-                state = 0
-                amount_str = ""
-            elif key in (curses.KEY_BACKSPACE, 127):
-                amount_str = amount_str[:-1]
-            elif ord('0') <= key <= ord('9'):
-                amount_str += chr(key)
-
-        elif state == 4:
-            if key == curses.KEY_LEFT:
-                sel_event = max(0, sel_event - 1)
-            elif key == curses.KEY_RIGHT:
-                sel_event = min(len(EVENT_NAMES) - 1, sel_event + 1)
-            elif key in (ord('\n'), ord('\r')):
-                market.toggle_event(EVENT_NAMES[sel_event])
-                state = 0
-            elif key == 27:
-                state = 0
-
-        elif state == 5:
-            if key == curses.KEY_LEFT:
-                sel_setting = max(0, sel_setting - 1)
-            elif key == curses.KEY_RIGHT:
-                sel_setting = min(2, sel_setting + 1)
-            elif key in (ord('\n'), ord('\r')):
-                amount_str = ""
-                state = 6
-            elif key == 27:
-                state = 0
-
-        elif state == 6:
-            if key == 27:
-                state = 5
-                amount_str = ""
-            elif key in (ord('\n'), ord('\r')):
-                try:
-                    v = int(amount_str)
-                    if v > 0:
-                        if sel_setting == 0:
-                            tick_interval = v
-                        elif sel_setting == 1:
-                            market.set_pool_size(v)
-                        elif sel_setting == 2:
-                            market.set_base_price(v)
-                except ValueError:
-                    pass
-                state = 5
-                amount_str = ""
-            elif key in (curses.KEY_BACKSPACE, 127):
-                amount_str = amount_str[:-1]
-            elif ord('0') <= key <= ord('9'):
-                amount_str += chr(key)
+            draw_header(stdscr, market, max_x, feedback)
+            draw_info(stdscr, market, header_h + chart_h + 1, max_x)
+            draw_menu(stdscr, max_y, max_x, state, sel_action, sel_res, sel_event, sel_setting, amount_str, tick_interval, market)
+            stdscr.refresh()
 
 
 if __name__ == "__main__":
